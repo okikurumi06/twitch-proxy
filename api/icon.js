@@ -1,44 +1,55 @@
-﻿const fetch = require("node-fetch");
-
-let accessToken = null;
-let expiresAt = 0;
-
-module.exports = async (req, res) => {
+export default async function handler(req, res) {
   const { username } = req.query;
+
   if (!username) {
-    return res.status(400).json({ error: "Missing username" });
+    return res.status(400).json({ error: 'username is required' });
   }
 
   const clientId = process.env.TWITCH_CLIENT_ID;
   const clientSecret = process.env.TWITCH_CLIENT_SECRET;
 
-  async function getAccessToken() {
-    const response = await fetch("https://id.twitch.tv/oauth2/token", {
-      method: "POST",
+  if (!clientId || !clientSecret) {
+    return res.status(500).json({ error: 'Missing Twitch credentials' });
+  }
+
+  try {
+    // アクセストークン取得
+    const tokenRes = await fetch(`https://id.twitch.tv/oauth2/token`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
       body: new URLSearchParams({
         client_id: clientId,
         client_secret: clientSecret,
-        grant_type: "client_credentials"
+        grant_type: 'client_credentials'
       })
     });
-    const data = await response.json();
-    accessToken = data.access_token;
-    expiresAt = Date.now() + data.expires_in * 1000;
-  }
 
-  if (!accessToken || Date.now() >= expiresAt) {
-    await getAccessToken();
-  }
+    const tokenData = await tokenRes.json();
+    const accessToken = tokenData.access_token;
 
-  const userRes = await fetch(`https://api.twitch.tv/helix/users?login=${username}`, {
-    headers: {
-      "Client-ID": clientId,
-      "Authorization": `Bearer ${accessToken}`
+    // ユーザー情報取得
+    const userRes = await fetch(`https://api.twitch.tv/helix/users?login=${encodeURIComponent(username)}`, {
+      headers: {
+        'Client-ID': clientId,
+        'Authorization': `Bearer ${accessToken}`
+      }
+    });
+
+    const userData = await userRes.json();
+
+    if (!userData.data || userData.data.length === 0) {
+      return res.status(404).json({ error: 'User not found' });
     }
-  });
 
-  const data = await userRes.json();
-  const iconUrl = data.data?.[0]?.profile_image_url || null;
+    const user = userData.data[0];
 
-  res.status(200).json({ username, iconUrl });
-};
+    return res.status(200).json({
+      username: user.login,                     // ログイン名
+      displayName: user.display_name,           // 表示名 ← 追加！
+      iconUrl: user.profile_image_url           // プロフィール画像URL
+    });
+  } catch (err) {
+    console.error(err);
+    return res.status(500).json({ error: 'Internal server error' });
+  }
+}
